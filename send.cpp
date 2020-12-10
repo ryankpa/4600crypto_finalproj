@@ -8,19 +8,17 @@ This program takes in <#> command line arguments:
 	argv[2] - path to receiver's public key
 	...
 NOTES/TO-DOS:
-	- message encryption now stores encrypted message in a buffer, also returns length of the encrypted message
-	- RSA encryption works fine. tested with decryption and it was able to correctly decipher AESkey and iv
-	- make sure to store every encryption result in a c string
-		- this is so we can append everything together at the end and write to output file only one time
-	- keep track of size for each ciphertext/signature for writing at beginning of output file
+	- check to see if it works with the receive program!
 */
 #pragma warning(disable: 4996)	// included to let me use deprecated openssl functions
 #include <stdlib.h>
 #include <iostream>
+#include <string>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/hmac.h>
 
 #define countof(array) (sizeof(array) / sizeof(array[0]))
 
@@ -30,22 +28,46 @@ using namespace std;
 void fileSetup(FILE* &plaintext, FILE* &transmitted_msg, char* argv[]);
 int encryptMessage(FILE* plaintext, unsigned char* key, unsigned char* iv, unsigned char* ciphertxt);
 int encryptAESKey(char* filename, unsigned char* AESkey, unsigned char* iv, unsigned char* encAES, unsigned char* encIV);
+int generateHMAC(unsigned char* msg, int msglen, unsigned char* key, int keylen, unsigned char* hash);
 
 int main(int argc, char* argv[]) {
 	FILE* plaintext, * transmitted_msg;
+	// opening files
+	cout << "Opening files...\n";
+	fileSetup(plaintext, transmitted_msg, argv);
+
+	// message encryption
+	cout << "Files opened. Encrypting message...\n";
 	unsigned char AESkey[16], iv[16];
 	unsigned char encryptedMsg[1024 + EVP_MAX_BLOCK_LENGTH];
 	int encrypt_msg_len, encrypted_keys_len;
-	cout << "Opening files...\n";
-	fileSetup(plaintext, transmitted_msg, argv);
-	cout << "Files opened. Encrypting message...\n";
 	encrypt_msg_len = encryptMessage(plaintext, AESkey, iv, encryptedMsg);
+
+	// key encryption
 	cout << "Message encryption done. Encrypting key...\n";
 	unsigned char encAES[256], encIV[256];
 	encrypted_keys_len = encryptAESKey(argv[2], AESkey, iv, encAES, encIV);
-	cout << "Key encryption done. Generating MAC...\n";
-	// fwrite(encryptedMsg, 1, encrypt_len, transmitted_msg);
+
+	//HMAC generation
+	cout << "Key encryption done. Generating HMAC...\n";
+	unsigned char hash[32];
+	int hash_len;
+	hash_len = generateHMAC(encryptedMsg, encrypt_msg_len, AESkey, 16, hash);
+
+	// output everything to file transmitted_msg points to
+	cout << "HMAC generation done. Writing to file...\n";
+	string lengths;
+	lengths.append(to_string(encrypt_msg_len)); lengths += " ";
+	lengths.append(to_string(encrypted_keys_len)); lengths += " ";
+	lengths.append(to_string(hash_len)); lengths += " ";
+	fwrite(lengths.c_str(), 1, lengths.length(), transmitted_msg);
+	fwrite(encryptedMsg, 1, encrypt_msg_len, transmitted_msg);
+	fwrite(encAES, 1, 256, transmitted_msg);
+	fwrite(encIV, 1, 256, transmitted_msg);
+	fwrite(hash, 1, hash_len, transmitted_msg);
+
 	// closing files
+	cout << "Successfully written to file!\n";
 	errno_t err = fclose(plaintext);
 	err = fclose(transmitted_msg);
 
@@ -105,18 +127,26 @@ encryptAESKey():
 int encryptAESKey(char* filename, unsigned char* AESkey, unsigned char* iv, unsigned char* encAES, unsigned char* encIV) {
 	int encAES_len, encIV_len;
 	// opening pub key
-	FILE* pubkey_file, *test_file;
+	FILE* pubkey_file;
 	errno_t err = fopen_s(&pubkey_file, filename, "r");
-	err = fopen_s(&test_file, "test.txt", "w+");
 	RSA* rsa;
 	rsa = PEM_read_RSA_PUBKEY(pubkey_file, NULL, 0, NULL);
 	// encrypting AES key
 	encAES_len = RSA_public_encrypt(RSA_size(rsa), AESkey, encAES, rsa, RSA_NO_PADDING);
 	// encrypt iv
 	encIV_len = RSA_public_encrypt(RSA_size(rsa), iv, encIV, rsa, RSA_NO_PADDING);
-	// FOR DEBUGGING: output encrypted AES and original AES
-	fwrite(encAES, sizeof(*encAES), RSA_size(rsa), test_file);
-	fwrite("\n", sizeof("\n"), 1, test_file);
-	fwrite(encIV, sizeof(*encIV), RSA_size(rsa), test_file);
 	return (encAES_len + encIV_len);
+}
+
+/*
+generateHMAC():
+	- generates a HMAC for the encrypted message using SHA-256
+	- references: 
+		- https://www.openssl.org/docs/man1.1.0/man3/HMAC.html
+	- the key used is the AES key
+*/
+int generateHMAC(unsigned char* msg, int msglen, unsigned char* key, int keylen, unsigned char* hash) {
+	unsigned int digest_len;
+	HMAC(EVP_sha256(), key, keylen, msg, msglen, hash, &digest_len);
+	return digest_len;
 }
