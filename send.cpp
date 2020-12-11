@@ -21,6 +21,7 @@ to decrypt.
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/hmac.h>
+#include <openssl/err.h>
 
 #define countof(array) (sizeof(array) / sizeof(array[0]))
 
@@ -41,7 +42,7 @@ int main(int argc, char* argv[]) {
 	// message encryption
 	cout << "Files opened. Encrypting message...\n";
 	// creating buffers for the AES key and iv, and the encrypted message
-	unsigned char AESkey[16], iv[16];
+	unsigned char AESkey[32], iv[16];
 	unsigned char encryptedMsg[1024 + EVP_MAX_BLOCK_LENGTH];
 	int encrypt_msg_len, encrypted_keys_len;
 	encrypt_msg_len = encryptMessage(plaintext, AESkey, iv, encryptedMsg);
@@ -55,7 +56,7 @@ int main(int argc, char* argv[]) {
 	cout << "Key encryption done. Generating HMAC...\n";
 	unsigned char hash[32];	// buffer for generated hash
 	int hash_len;
-	hash_len = generateHMAC(encryptedMsg, encrypt_msg_len, AESkey, 16, hash);
+	hash_len = generateHMAC(encryptedMsg, encrypt_msg_len, AESkey, 32, hash);
 
 	// output everything to file transmitted_msg points to
 	cout << "HMAC generation done. Writing to file...\n";
@@ -95,7 +96,7 @@ void fileSetup(FILE* &plaintext, FILE* &transmitted_msg, char* argv[]) {
 	char new_filename[100];
 	strncpy_s(new_filename, countof(new_filename), argv[1] + slash_pos, strlen(argv[1] + slash_pos) - 4);
 	strcat_s(new_filename, countof(new_filename), "_encrypted.txt");
-	err = fopen_s(&transmitted_msg, new_filename, "w+");
+	err = fopen_s(&transmitted_msg, new_filename, "wb");
 }
 
 /*
@@ -108,8 +109,8 @@ encryptMessage()
 */
 int encryptMessage(FILE* plaintext, unsigned char* key, unsigned char* iv, unsigned char* ciphertxt) {
 	// AES key generation
-	RAND_bytes(key, sizeof key);
-	RAND_bytes(iv, sizeof iv);
+	RAND_bytes(key, 32);
+	RAND_bytes(iv, 16);
 
 	// encrypting
 	// buffer for reading from plaintext file
@@ -146,14 +147,27 @@ int encryptAESKey(char* filename, unsigned char* AESkey, unsigned char* iv, unsi
 	int encAES_len, encIV_len;
 	// opening public key and reading it in
 	FILE* pubkey_file;
-	errno_t err = fopen_s(&pubkey_file, filename, "r");
+	errno_t error = fopen_s(&pubkey_file, filename, "r");
 	RSA* rsa;
 	rsa = PEM_read_RSA_PUBKEY(pubkey_file, NULL, 0, NULL);
 
 	// encrypting AES key
+
+	char err[120];
+
 	encAES_len = RSA_public_encrypt(RSA_size(rsa), AESkey, encAES, rsa, RSA_NO_PADDING);
+	if (encAES_len == -1) {
+		ERR_load_crypto_strings();
+		ERR_error_string(ERR_get_error(), err);
+		fprintf(stderr, "Error encrypting key: %s\n", err);
+	}
 	// encrypting iv
 	encIV_len = RSA_public_encrypt(RSA_size(rsa), iv, encIV, rsa, RSA_NO_PADDING);
+	if (encIV_len == -1) {
+		ERR_load_crypto_strings();
+		ERR_error_string(ERR_get_error(), err);
+		fprintf(stderr, "Error encrypting iv: %s\n", err);
+	}
 	return (encAES_len + encIV_len);
 }
 

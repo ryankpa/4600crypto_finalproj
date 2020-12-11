@@ -33,6 +33,7 @@ int decryptAESKey(unsigned char* encAES, unsigned char* encIV, unsigned char* de
 int main(int argc, char* argv[]) {
 	unsigned char* enc_msg, * encAES, * encIV, * MAC;	// buffers for the content in ciphertext
 	int* lengths;	// 0 = message length, 1 = encrypted keys length, 2 = MAC length
+
 	cout << "Parsing ciphertext...\n";
 	parseCiphertxt(argv[1], enc_msg, encAES, encIV, MAC, lengths);
 
@@ -46,13 +47,9 @@ int main(int argc, char* argv[]) {
 	// verify MAC
 	cout << "Key and IV decryption complete. Authenticating message...\n";
 	unsigned char hash[32];	// buffer for result of HMAC function
-	bool verified = true;
-	generateHMAC(enc_msg, lengths[0], decAES, 16, hash);
-	for (int i = 0; i < lengths[2]; i++)
-		if (hash[i] != MAC[i]) {
-			verified = false;
-			break;
-		}
+	generateHMAC(enc_msg, lengths[0], decAES, 32, hash);
+	
+	bool verified = (memcmp(hash, MAC, 32) == 0);
 
 	if (verified)
 		cout << "The message has been authenticated successfully.\n";
